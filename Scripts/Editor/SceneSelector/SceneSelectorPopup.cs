@@ -1,10 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using UnityEditor;
 using UnityEditor.SceneManagement;
-using UnityEditorInternal;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -12,54 +10,42 @@ namespace Gustom.Editor
 {
     public class SceneSelectorPopup : PopupWindowContent
     {
-        private sealed class SceneEntry
-        {
-            public string Path;
-            public string Name;
-            public string Folder;
-            public bool InBuildSettings;
-            public bool Enabled;
-            public int BuildOrder;
-            public int BuildIndex;
-        }
+        private readonly Color _hoverColor = new(0.5f, 0.5f, 0.5f, 0.2f);
+        private readonly Color _altRowColor = new(0f, 0f, 0f, 0.08f);
 
-        private readonly List<SceneEntry> allScenes = new();
-        private readonly List<SceneEntry> visibleScenes = new();
-        private Rect[] sceneRowRects = Array.Empty<Rect>();
-        private ReorderableList reorderableList;
-        private Vector2 scrollPosition;
-        private string search = string.Empty;
-        private int highlightedIndex;
-        private bool focusSearch = true;
-        private Texture sceneIcon;
-        private int pressedSceneIndex = -1;
-        private int dragControlId;
-        private int dropTargetIndex = -1;
-        private int dropInsertionIndex = -1;
-        private Vector2 mouseDownPosition;
-        private Rect pressedSceneRect;
-        private string pressedScenePath;
-        private bool isDraggingScene;
-        private EditorWindow hostWindow;
-        private bool isInitialized;
+        private readonly SceneSelectorStore _store = SceneSelectorStore.Shared;
 
-        private static GUIStyle rightInfoStyle;
-        private static GUIStyle leftIndexStyle;
-        private static GUIStyle searchIconStyle;
+        private readonly List<SceneEntry> _visibleScenes = new();
+        private Rect[] _sceneRowRects = Array.Empty<Rect>();
+        private Vector2 _scrollPosition;
+        private string _search = string.Empty;
+        private SceneSelectorTab _activeTab = SceneSelectorTab.All;
+        private bool _showSettings;
+        private bool _focusSearch = true;
+        private Texture _sceneIcon;
+        private int _pressedSceneIndex = -1;
+        private int _dragControlId;
+        private int _dropTargetIndex = -1;
+        private int _dropInsertionIndex = -1;
+        private Vector2 _mouseDownPosition;
+        private Rect _pressedSceneRect;
+        private string _pressedScenePath;
+        private bool _isDraggingScene;
+        private bool _pressedCanReorder;
+        private EditorWindow _hostWindow;
+        private bool _isInitialized;
+        private GUIStyle _pinButtonStyle;
+        private float RowHeight => _store.DisplaySize == SceneDisplaySize.Large
+            ? GustomEditorGUI.LargeListRowHeight
+            : GustomEditorGUI.CompactListRowHeight;
 
-        public override Vector2 GetWindowSize()
-        {
-            return new Vector2(340f, 420f);
-        }
+        public override Vector2 GetWindowSize() => new(340f, 420f);
 
         public override void OnOpen()
         {
-            if (!isInitialized) 
-            {
-                Initialize();
-            }
+            if (!_isInitialized) Initialize();
         }
-        
+
         public override void OnClose()
         {
             base.OnClose();
@@ -68,74 +54,163 @@ namespace Gustom.Editor
 
         public void InitializeForWindow(EditorWindow window)
         {
-            hostWindow = window;
+            _hostWindow = window;
             Initialize();
         }
 
-        private EditorWindow HostWindow => hostWindow ? hostWindow : editorWindow;
+        private EditorWindow HostWindow => _hostWindow ? _hostWindow : editorWindow;
 
         private void Initialize()
         {
-            if (isInitialized) return;
-            isInitialized = true;
+            if (_isInitialized) return;
+            _isInitialized = true;
             if (HostWindow) HostWindow.wantsMouseMove = true;
-            sceneIcon = AssetPreview.GetMiniTypeThumbnail(typeof(SceneAsset));
-            if (!sceneIcon) sceneIcon = EditorGUIUtility.IconContent("SceneAsset Icon").image;
-            
-            EditorApplication.delayCall += () => 
+            _sceneIcon = AssetPreview.GetMiniTypeThumbnail(typeof(SceneAsset));
+            if (!_sceneIcon) _sceneIcon = EditorGUIUtility.IconContent("SceneAsset Icon").image;
+
+            _store.Changed += OnStoreChanged;
+
+            EditorApplication.delayCall += () =>
             {
-                RefreshSceneData();
+                _store.Refresh();
                 FocusSearchField();
             };
 
             SceneAssetChangeWatcher.OnScenesChanged += HandleScenesChanged;
-        }
-        
-        private void HandleScenesChanged()
-        {
-            EditorApplication.delayCall += RefreshAndRepaint;
+            EditorSceneManager.activeSceneChangedInEditMode += HandleActiveSceneChanged;
         }
 
-        private void RefreshAndRepaint()
+        private void OnStoreChanged()
         {
-            RefreshSceneData();
+            RebuildVisibleScenes();
+            RefreshSceneRows();
             HostWindow?.Repaint();
         }
 
+        private void HandleScenesChanged() => EditorApplication.delayCall += _store.Refresh;
+
+        private void HandleActiveSceneChanged(Scene previousScene, Scene newScene) => HostWindow?.Repaint();
+
         public void Unsubscribe()
         {
+            _store.Changed -= OnStoreChanged;
             SceneAssetChangeWatcher.OnScenesChanged -= HandleScenesChanged;
+            EditorSceneManager.activeSceneChangedInEditMode -= HandleActiveSceneChanged;
         }
 
-        public override void OnGUI(Rect rect)
-        {
-            DrawSelectorGUI(rect);
-        }
+        public override void OnGUI(Rect rect) => DrawSelectorGUI(rect);
 
         public void DrawSelectorGUI(Rect rect)
         {
-            if (Event.current.type == EventType.MouseMove && rect.Contains(Event.current.mousePosition)) 
-            {
+            if (Event.current.type == EventType.MouseMove && rect.Contains(Event.current.mousePosition))
                 HostWindow?.Repaint();
-            }
-            HandleKeyboard();
-            DrawSearchToolbar();
 
-            if (visibleScenes.Count == 0)
+            DrawSearchToolbar();
+            DrawControlsBar();
+            if (_showSettings) DrawSettingsArea();
+            DrawTabsBar();
+            EditorGUILayout.Space(2f);
+
+            EditorGUILayout.BeginVertical(GUILayout.ExpandHeight(true));
+            if (_visibleScenes.Count == 0)
             {
-                GUILayout.Space(18f);
-                GUILayout.Label(allScenes.Count == 0 ? "No scenes in this project" : "No scenes match your search", EditorStyles.centeredGreyMiniLabel);
+                GUILayout.Space(12f);
+                string emptyMessage = _store.AllScenes.Count == 0
+                    ? "No scenes in this project"
+                    : _activeTab == SceneSelectorTab.Pinned
+                        ? "No pinned scenes"
+                    : _activeTab == SceneSelectorTab.Builds
+                        ? "No scenes in Build Settings"
+                        : "No scenes match your search";
+                GUILayout.Label(emptyMessage, EditorStyles.centeredGreyMiniLabel);
+                GUILayout.FlexibleSpace();
             }
             else
             {
-                scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition, GUILayout.ExpandHeight(true));
-                reorderableList.DoLayoutList();
+                _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition, GUILayout.ExpandHeight(true));
+                for (int index = 0; index < _visibleScenes.Count; index++)
+                {
+                    Rect rowRect = GUILayoutUtility.GetRect(0f, RowHeight, GUILayout.ExpandWidth(true));
+                    DrawSceneElement(rowRect, index);
+                }
                 EditorGUILayout.EndScrollView();
             }
+            EditorGUILayout.EndVertical();
 
-            Rect separatorRect = GUILayoutUtility.GetRect(0f, 1f, GUILayout.ExpandWidth(true));
-            EditorGUI.DrawRect(separatorRect, EditorGUIUtility.isProSkin ? new Color(1f, 1f, 1f, 0.12f) : new Color(0f, 0f, 0f, 0.12f));
-            GUILayout.Label("Click/Enter: Open  ·  Ctrl+Open: Additive  ·  Right-click: Options", EditorStyles.centeredGreyMiniLabel, GUILayout.Height(16f));
+            GustomEditorGUI.DrawFooterGuide("Click: Open  ·  Ctrl+Click: Additive  ·  Right-click: Options");
+        }
+
+        private void DrawControlsBar()
+        {
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            if (GUILayout.Button(EditorGUIUtility.IconContent("Settings"), EditorStyles.toolbarButton, GUILayout.Width(25f)))
+                _showSettings = !_showSettings;
+            GUILayout.FlexibleSpace();
+            //if (GUILayout.Button(EditorGUIUtility.IconContent("Refresh"), EditorStyles.toolbarButton, GUILayout.Width(24f)))
+            if (GUILayout.Button(new GUIContent("Refresh", "Update the list of scenes in the project."), EditorStyles.toolbarButton, GUILayout.Width(64f)))
+            {
+                _store.Refresh();
+                GUIUtility.ExitGUI();
+            }
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawSettingsArea()
+        {
+            EditorGUILayout.BeginVertical(GustomEditorGUI.SettingsBoxStyle);
+            bool showStripedRows = EditorGUILayout.ToggleLeft("Striped rows", _store.ShowStripedRows);
+            bool showSceneIcon = EditorGUILayout.ToggleLeft("Show scene icon", _store.ShowSceneIcon);
+            bool showBuildIndex = EditorGUILayout.ToggleLeft("Show build index", _store.ShowBuildIndex);
+            bool showSceneState = EditorGUILayout.ToggleLeft("Show status", _store.ShowSceneState);
+            SceneDisplaySize displaySize = (SceneDisplaySize)EditorGUILayout.EnumPopup("Display size", _store.DisplaySize);
+            if (showSceneIcon != _store.ShowSceneIcon || showBuildIndex != _store.ShowBuildIndex
+                || showSceneState != _store.ShowSceneState || displaySize != _store.DisplaySize
+                || showStripedRows != _store.ShowStripedRows)
+            {
+                _store.SetDisplayOptions(showSceneIcon, showBuildIndex, showSceneState, displaySize, showStripedRows);
+            }
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawTabsBar()
+        {
+            string[] tabLabels =
+            {
+                "All",
+                "Builds",
+                "Pinned"
+            };
+            int selectedTab = (int)_activeTab;
+            int nextTab = GUILayout.Toolbar(selectedTab, tabLabels, EditorStyles.toolbarButton);
+            if (nextTab != selectedTab)
+            {
+                _scrollPosition = Vector2.zero;
+                _activeTab = (SceneSelectorTab)nextTab;
+                RebuildVisibleScenes();
+                RefreshSceneRows();
+            }
+        }
+
+        private void RefreshSceneRows()
+        {
+            _sceneRowRects = new Rect[_visibleScenes.Count];
+        }
+
+        private void RebuildVisibleScenes()
+        {
+            _visibleScenes.Clear();
+            foreach (SceneEntry scene in _store.AllScenes)
+            {
+                if (_activeTab == SceneSelectorTab.Pinned && !scene.IsPinned) continue;
+                if (_activeTab == SceneSelectorTab.Builds && !scene.InBuildSettings) continue;
+
+                if (string.IsNullOrEmpty(_search)
+                    || scene.Name.IndexOf(_search, StringComparison.OrdinalIgnoreCase) >= 0
+                    || scene.Folder.IndexOf(_search, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    _visibleScenes.Add(scene);
+                }
+            }
         }
 
         private void FocusSearchField()
@@ -149,267 +224,109 @@ namespace Gustom.Editor
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
             GUI.SetNextControlName(SceneSelectorEditor.SearchControlName);
-            string nextSearch = EditorGUILayout.TextField(search, EditorStyles.toolbarSearchField);
-            if (!string.Equals(nextSearch, search, StringComparison.Ordinal))
+            string nextSearch = EditorGUILayout.TextField(_search, EditorStyles.toolbarSearchField);
+            if (!string.Equals(nextSearch, _search, StringComparison.Ordinal))
             {
-                search = nextSearch;
-                highlightedIndex = 0;
+                _search = nextSearch;
+                _scrollPosition = Vector2.zero;
                 RebuildVisibleScenes();
+                RefreshSceneRows();
             }
 
-            if (focusSearch)
+            if (_focusSearch)
             {
                 EditorGUI.FocusTextInControl(SceneSelectorEditor.SearchControlName);
-                focusSearch = false;
+                _focusSearch = false;
             }
 
-            if (GUILayout.Button(EditorGUIUtility.IconContent("Refresh"), EditorStyles.toolbarButton, GUILayout.Width(24f)))
-            {
-                RefreshSceneData();
-                GUIUtility.ExitGUI();
-            }
             EditorGUILayout.EndHorizontal();
         }
 
-        private void HandleKeyboard()
+        private void DrawSceneElement(Rect rowRect, int index)
         {
-            Event currentEvent = Event.current;
-            if (currentEvent.type == EventType.KeyDown)
-            {
-                if (currentEvent.keyCode == KeyCode.DownArrow)
-                {
-                    if (visibleScenes.Count > 0)
-                    {
-                        highlightedIndex = Mathf.Clamp(highlightedIndex + 1, 0, visibleScenes.Count - 1);
-                        ScrollToHighlight();
-                    }
-                    currentEvent.Use();
-                }
-                else if (currentEvent.keyCode == KeyCode.UpArrow)
-                {
-                    if (visibleScenes.Count > 0)
-                    {
-                        highlightedIndex = Mathf.Clamp(highlightedIndex - 1, 0, visibleScenes.Count - 1);
-                        ScrollToHighlight();
-                    }
-                    currentEvent.Use();
-                }
-                else if (currentEvent.keyCode is KeyCode.Return or KeyCode.KeypadEnter && visibleScenes.Count > 0)
-                {
-                    SceneEntry selectedScene = visibleScenes[Mathf.Clamp(highlightedIndex, 0, visibleScenes.Count - 1)];
-                    if (OpenScene(selectedScene.Path, currentEvent.control || currentEvent.command))
-                    {
-                        if (!hostWindow) HostWindow?.Close();
-                    }
-                    currentEvent.Use();
-                }
-                else if (currentEvent.keyCode == KeyCode.Escape)
-                {
-                    HostWindow?.Close();
-                    currentEvent.Use();
-                }
-            }
-        }
+            if (index < 0 || index >= _visibleScenes.Count) return;
 
-        private void ScrollToHighlight()
-        {
-            scrollPosition.y = highlightedIndex * SceneSelectorEditor.RowHeight;
-            HostWindow?.Repaint();
-        }
-
-        private void RefreshSceneData()
-        {
-            allScenes.Clear();
-
-            Dictionary<string, EditorBuildSettingsScene> buildSettingsByPath = new Dictionary<string, EditorBuildSettingsScene>();
-            Dictionary<string, int> buildOrderByPath = new Dictionary<string, int>();
-            EditorBuildSettingsScene[] buildSettings = EditorBuildSettings.scenes;
-            for (int index = 0; index < buildSettings.Length; index++)
-            {
-                EditorBuildSettingsScene buildScene = buildSettings[index];
-                if (buildSettingsByPath.TryAdd(buildScene.path, buildScene))
-                {
-                    buildOrderByPath.Add(buildScene.path, index);
-                }
-            }
-
-            Dictionary<string, int> buildIndexByPath = new Dictionary<string, int>();
-            int nextBuildIndex = 0;
-            for (int index = 0; index < buildSettings.Length; index++)
-            {
-                EditorBuildSettingsScene buildScene = buildSettings[index];
-                if (buildScene.enabled)
-                {
-                    buildIndexByPath[buildScene.path] = nextBuildIndex;
-                    nextBuildIndex++;
-                }
-            }
-
-            string[] sceneGuids = AssetDatabase.FindAssets("t:SceneAsset");
-            foreach (string guid in sceneGuids)
-            {
-                string path = AssetDatabase.GUIDToAssetPath(guid);
-                if (string.IsNullOrEmpty(path) || !path.StartsWith("Assets/", StringComparison.Ordinal)) continue;
-
-                string folder = Path.GetDirectoryName(path)?.Replace('\\', '/') ?? string.Empty;
-                if (folder.StartsWith("Assets/", StringComparison.Ordinal)) folder = folder.Substring(7);
-                else if (folder == "Assets") folder = string.Empty;
-
-                bool isInBuildSettings = buildSettingsByPath.TryGetValue(path, out EditorBuildSettingsScene buildScene);
-                allScenes.Add(new SceneEntry
-                {
-                    Path = path,
-                    Name = Path.GetFileNameWithoutExtension(path),
-                    Folder = folder,
-                    InBuildSettings = isInBuildSettings,
-                    Enabled = isInBuildSettings && buildScene.enabled,
-                    BuildOrder = isInBuildSettings ? buildOrderByPath[path] : int.MaxValue,
-                    BuildIndex = buildIndexByPath.GetValueOrDefault(path, -1)
-                });
-            }
-
-            allScenes.Sort(CompareScenes);
-            RebuildVisibleScenes();
-            CreateReorderableList();
-            highlightedIndex = visibleScenes.Count == 0 ? 0 : Mathf.Clamp(highlightedIndex, 0, visibleScenes.Count - 1);
-            HostWindow?.Repaint();
-        }
-
-        private static int CompareScenes(SceneEntry left, SceneEntry right)
-        {
-            int buildMembership = right.InBuildSettings.CompareTo(left.InBuildSettings);
-            if (buildMembership != 0) return buildMembership;
-
-            if (left.InBuildSettings)
-            {
-                int buildOrder = left.BuildOrder.CompareTo(right.BuildOrder);
-                if (buildOrder != 0) return buildOrder;
-            }
-            return StringComparer.OrdinalIgnoreCase.Compare(left.Name, right.Name);
-        }
-
-        private void RebuildVisibleScenes()
-        {
-            visibleScenes.Clear();
-            foreach (SceneEntry scene in allScenes)
-            {
-                if (string.IsNullOrEmpty(search) || scene.Name.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0 || scene.Folder.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    visibleScenes.Add(scene);
-                }
-            }
-
-            sceneRowRects = new Rect[visibleScenes.Count];
-            if (reorderableList != null)
-            {
-                reorderableList.list = visibleScenes;
-            }
-        }
-
-        private void CreateReorderableList()
-        {
-            reorderableList = new ReorderableList(visibleScenes, typeof(SceneEntry), false, false, false, false)
-            {
-                elementHeight = SceneSelectorEditor.RowHeight,
-                drawElementCallback = DrawSceneElement,
-                onReorderCallbackWithDetails = OnScenesReordered
-            };
-        }
-
-        private void DrawSceneElement(Rect rowRect, int index, bool isActive, bool isFocused)
-        {
-            if (index < 0 || index >= visibleScenes.Count) return;
-
-            SceneEntry scene = visibleScenes[index];
+            SceneEntry scene = _visibleScenes[index];
             Event currentEvent = Event.current;
             int rowControlId = GUIUtility.GetControlID(FocusType.Passive, rowRect);
-            if (currentEvent.type == EventType.Repaint) sceneRowRects[index] = rowRect;
-            Rect rowVisualRect = new Rect(rowRect.x - 4f, rowRect.y, rowRect.width + 8f, rowRect.height);
-            bool isHighlighted = index == highlightedIndex;
+            if (currentEvent.type == EventType.Repaint) _sceneRowRects[index] = rowRect;
             bool isActiveScene = SceneManager.GetActiveScene().path == scene.Path;
             bool isLoaded = EditorSceneManager.GetSceneByPath(scene.Path).isLoaded;
+            bool isHovered = rowRect.Contains(currentEvent.mousePosition);
 
             if (currentEvent.type == EventType.Repaint)
             {
-                if (isActiveScene)
-                {
-                    EditorGUI.DrawRect(rowVisualRect, EditorGUIUtility.isProSkin ? new Color(0.18f, 0.42f, 0.24f, 0.76f) : new Color(0.24f, 0.62f, 0.34f, 0.28f));
-                    EditorGUI.DrawRect(new Rect(rowVisualRect.x, rowVisualRect.y, 2f, rowVisualRect.height), new Color(0.30f, 0.78f, 0.42f, 1f));
-                }
-                else if (rowVisualRect.Contains(currentEvent.mousePosition) || isHighlighted)
-                {
-                    EditorGUI.DrawRect(rowVisualRect, EditorGUIUtility.isProSkin ? new Color(1f, 1f, 1f, isHighlighted ? 0.09f : 0.045f) : new Color(0f, 0f, 0f, isHighlighted ? 0.08f : 0.04f));
-                }
+                GustomEditorGUI.DrawRowBackground(rowRect, index, isActiveScene, isHovered, _store.ShowStripedRows, _altRowColor, _hoverColor);
 
-                if (isDraggingScene && index == pressedSceneIndex)
-                {
-                    EditorGUI.DrawRect(rowVisualRect, EditorGUIUtility.isProSkin ? new Color(0.35f, 0.65f, 1f, 0.16f) : new Color(0.1f, 0.35f, 0.8f, 0.12f));
-                }
+                if (_isDraggingScene && index == _pressedSceneIndex)
+                    EditorGUI.DrawRect(rowRect, EditorGUIUtility.isProSkin ? new Color(0.35f, 0.65f, 1f, 0.16f) : new Color(0.1f, 0.35f, 0.8f, 0.12f));
 
-                if (isDraggingScene && (index == dropInsertionIndex || (index == visibleScenes.Count - 1 && dropInsertionIndex == visibleScenes.Count)))
+                if (_isDraggingScene && (index == _dropInsertionIndex || (index == _visibleScenes.Count - 1 && _dropInsertionIndex == _visibleScenes.Count)))
                 {
-                    float markerY = dropInsertionIndex == visibleScenes.Count ? rowRect.yMax - 2f : rowRect.y;
-                    EditorGUI.DrawRect(new Rect(rowVisualRect.x, markerY, rowVisualRect.width, 2f), EditorGUIUtility.isProSkin ? new Color(0.35f, 0.65f, 1f, 0.9f) : new Color(0.1f, 0.35f, 0.8f, 0.9f));
+                    float markerY = _dropInsertionIndex == _visibleScenes.Count ? rowRect.yMax - 2f : rowRect.y;
+                    EditorGUI.DrawRect(new Rect(rowRect.x, markerY, rowRect.width, 2f), EditorGUIUtility.isProSkin ? new Color(0.35f, 0.65f, 1f, 0.9f) : new Color(0.1f, 0.35f, 0.8f, 0.9f));
                 }
             }
 
-            Rect iconRect = new Rect(rowRect.x + 6f, rowRect.y + 4f, 16f, 16f);
-            Rect pingRect = new Rect(rowRect.xMax - 21f, rowRect.y + (rowRect.height - 16f) * 0.5f, 18f, 18f);
-            bool hover = rowRect.Contains(currentEvent.mousePosition);
-            float infoRight = hover ? pingRect.x - 3f : rowRect.xMax - 6f;
-            Rect infoRect = new Rect(rowRect.xMax - 104f, rowRect.y, Mathf.Max(0f, infoRight - (rowRect.xMax - 104f)), rowRect.height);
-            float contentLeft = iconRect.xMax + 4f;
-            float nameLeft = contentLeft;
-
-            if (scene.InBuildSettings)
-            {
-                string buildIndexText = scene.Enabled ? scene.BuildIndex.ToString() : "–";
-                GUIContent buildIndexContent = new GUIContent(buildIndexText, "Build index. Right-click for Build Settings options.");
-                GUIStyle indexStyle = GetLeftIndexStyle();
-                float indexWidth = indexStyle.CalcSize(buildIndexContent).x;
-                Rect indexRect = new Rect(contentLeft, rowRect.y, indexWidth, rowRect.height);
-                GUI.Label(indexRect, buildIndexContent, indexStyle);
-                nameLeft = indexRect.xMax + 4f;
-            }
-
-            Rect nameRect = new Rect(nameLeft, rowRect.y, Mathf.Max(0f, infoRect.x - nameLeft - 5f), rowRect.height);
-            if (sceneIcon) GUI.DrawTexture(iconRect, sceneIcon, ScaleMode.ScaleToFit, true);
-
-            GUIStyle nameStyle = isActiveScene ? EditorStyles.boldLabel : EditorStyles.label;
-            GUIContent sceneContent = new GUIContent(scene.Name, scene.Path);
-            GUI.Label(nameRect, sceneContent, nameStyle);
-
+            GUIStyle nameStyle = isActiveScene ? GustomEditorGUI.ActiveRowLabelStyle : GustomEditorGUI.RowLabelStyle;
             string sceneInfo = isActiveScene ? "[active]" : isLoaded ? "[loaded]" : scene.Folder;
-            if (!string.IsNullOrEmpty(sceneInfo)) GUI.Label(infoRect, sceneInfo, GetRightInfoStyle());
-
-            // searchIconStyle ??= new GUIStyle(EditorStyles.iconButton)
-            // {
-            //     alignment = TextAnchor.MiddleCenter,
-            // };
-            //
-            // if (hover && GUI.Button(pingRect, EditorGUIUtility.IconContent("Search Icon"), searchIconStyle))
-            // {
-            //     EditorGUIUtility.PingObject(AssetDatabase.LoadAssetAtPath<SceneAsset>(scene.Path));
-            // }
-            
-            if (hover)
+            float sceneIconSize = _store.DisplaySize == SceneDisplaySize.Large
+                ? GustomEditorGUI.LargeListIconSize
+                : GustomEditorGUI.CompactListIconSize;
+            GUIContent buildIndexContent = _store.ShowBuildIndex && scene.InBuildSettings
+                ? new GUIContent(scene.Enabled ? scene.BuildIndex.ToString() : "–", "Build index. Right-click for Build Settings options.")
+                : null;
+            SceneAsset sceneAsset = AssetDatabase.LoadAssetAtPath<SceneAsset>(scene.Path);
+            const float iconGap = 4f;
+            const float pinSize = 18f;
+            Rect pinnedRect = new(rowRect.xMax - pinSize - 3f, rowRect.y + (rowRect.height - pinSize) * 0.5f, pinSize, pinSize);
+            Rect pingRect = new(pinnedRect.x - 19f, rowRect.y + (rowRect.height - 16f) * 0.5f, 18f, 16f);
+            _pinButtonStyle ??= new GUIStyle(EditorStyles.label) { alignment = TextAnchor.MiddleCenter };
+            _pinButtonStyle.normal.textColor = scene.IsPinned
+                ? EditorGUIUtility.isProSkin ? Color.yellow : new Color(0.9f, 0.7f, 0.1f)
+                : Color.gray;
+            if (GUI.Button(pinnedRect, scene.IsPinned ? "★" : "☆", _pinButtonStyle))
             {
-                GUIContent searchIcon = EditorGUIUtility.IconContent("Search Icon");
-                GUI.DrawTexture(pingRect, searchIcon.image, ScaleMode.ScaleToFit);
-
-                if (currentEvent.type == EventType.MouseDown && currentEvent.button == 0 && pingRect.Contains(currentEvent.mousePosition))
-                {
-                    EditorGUIUtility.PingObject(AssetDatabase.LoadAssetAtPath<SceneAsset>(scene.Path));
-                    currentEvent.Use();
-                }
+                _store.TogglePinned(scene);
+                GUIUtility.ExitGUI();
             }
+
+            float contentX = rowRect.x + 8f;
+            if (_store.ShowSceneIcon && _sceneIcon)
+            {
+                Rect iconRect = new(contentX, rowRect.y + (rowRect.height - sceneIconSize) * 0.5f, sceneIconSize, sceneIconSize);
+                GustomEditorGUI.DrawTexture(iconRect, _sceneIcon);
+                contentX = iconRect.xMax + iconGap;
+            }
+
+            if (buildIndexContent != null)
+            {
+                float prefixWidth = GustomEditorGUI.CenteredMiniLabelStyle.CalcSize(buildIndexContent).x;
+                Rect prefixRect = new(contentX, rowRect.y, prefixWidth, rowRect.height);
+                GUI.Label(prefixRect, buildIndexContent, GustomEditorGUI.CenteredMiniLabelStyle);
+                contentX = prefixRect.xMax + iconGap;
+            }
+
+            float textRight = isHovered && sceneAsset
+                ? pingRect.x - 2f
+                : pinnedRect.x - 2f;
+            if (_store.ShowSceneState)
+            {
+                float trailingLeft = Mathf.Max(contentX, textRight - 100f);
+                Rect statusRect = new(trailingLeft, rowRect.y, Mathf.Max(0f, textRight - trailingLeft), rowRect.height);
+                GUI.Label(statusRect, sceneInfo, GustomEditorGUI.RightMiniLabelStyle);
+                textRight = trailingLeft - 5f;
+            }
+
+            GUI.Label(new Rect(contentX, rowRect.y, Mathf.Max(0f, textRight - contentX), rowRect.height), new GUIContent(scene.Name, scene.Path), nameStyle);
+            GustomEditorGUI.DrawPingButton(pingRect, sceneAsset, isHovered);
 
             if (currentEvent.type == EventType.ContextClick && rowRect.Contains(currentEvent.mousePosition))
             {
                 ShowSceneContextMenu(scene);
                 currentEvent.Use();
             }
-            else
+            else if (currentEvent.type != EventType.MouseDown || !pinnedRect.Contains(currentEvent.mousePosition))
             {
                 HandleSceneRowInput(rowRect, pingRect, index, scene.Path, rowControlId);
             }
@@ -420,31 +337,30 @@ namespace Gustom.Editor
             Event currentEvent = Event.current;
             if (currentEvent.type == EventType.MouseDown && currentEvent.button == 0 && rowRect.Contains(currentEvent.mousePosition) && !pingRect.Contains(currentEvent.mousePosition))
             {
-                pressedSceneIndex = index;
-                dragControlId = rowControlId;
-                dropTargetIndex = index;
-                dropInsertionIndex = index;
-                mouseDownPosition = currentEvent.mousePosition;
-                pressedSceneRect = rowRect;
-                pressedScenePath = scenePath;
-                isDraggingScene = false;
+                _pressedSceneIndex = index;
+                _dragControlId = rowControlId;
+                _dropTargetIndex = index;
+                _dropInsertionIndex = index;
+                _mouseDownPosition = currentEvent.mousePosition;
+                _pressedSceneRect = rowRect;
+                _pressedScenePath = scenePath;
+                _isDraggingScene = false;
+                _pressedCanReorder = _visibleScenes[index].InBuildSettings;
                 GUIUtility.hotControl = rowControlId;
                 currentEvent.Use();
                 return;
             }
 
-            if (pressedSceneIndex < 0) return;
+            if (_pressedSceneIndex < 0) return;
 
             switch (currentEvent.type)
             {
                 case EventType.MouseDrag:
                 {
-                    if (!isDraggingScene && (currentEvent.mousePosition - mouseDownPosition).sqrMagnitude >= 16f)
-                    {
-                        isDraggingScene = true;
-                    }
+                    if (!_isDraggingScene && (currentEvent.mousePosition - _mouseDownPosition).sqrMagnitude >= 16f)
+                        _isDraggingScene = _pressedCanReorder;
 
-                    if (isDraggingScene)
+                    if (_isDraggingScene)
                     {
                         UpdateDropTarget(currentEvent.mousePosition);
                         HostWindow?.Repaint();
@@ -455,21 +371,19 @@ namespace Gustom.Editor
                 }
                 case EventType.MouseUp when currentEvent.button == 0:
                 {
-                    if (!isDraggingScene && (currentEvent.mousePosition - mouseDownPosition).sqrMagnitude >= 16f)
-                    {
-                        isDraggingScene = true;
-                    }
+                    if (!_isDraggingScene && (currentEvent.mousePosition - _mouseDownPosition).sqrMagnitude >= 16f)
+                        _isDraggingScene = _pressedCanReorder;
 
-                    bool wasDragging = isDraggingScene;
-                    int sourceIndex = pressedSceneIndex;
+                    bool wasDragging = _isDraggingScene;
+                    int sourceIndex = _pressedSceneIndex;
                     bool additiveOpen = currentEvent.control || currentEvent.command;
                     if (wasDragging) UpdateDropTarget(currentEvent.mousePosition);
-                    int targetIndex = dropTargetIndex;
+                    int targetIndex = _dropTargetIndex;
                     bool openScene = !wasDragging
-                                     && pressedSceneRect.Contains(currentEvent.mousePosition)
-                                     && !GetPingRect(pressedSceneRect).Contains(currentEvent.mousePosition);
-                    string openScenePath = pressedScenePath;
-                    int controlId = dragControlId;
+                                     && _pressedSceneRect.Contains(currentEvent.mousePosition)
+                                     && !GetPingRect(_pressedSceneRect).Contains(currentEvent.mousePosition);
+                    string openScenePath = _pressedScenePath;
+                    int controlId = _dragControlId;
 
                     ResetSceneRowDrag();
                     if (GUIUtility.hotControl == controlId) GUIUtility.hotControl = 0;
@@ -477,9 +391,9 @@ namespace Gustom.Editor
 
                     if (wasDragging)
                     {
-                        ReorderBuildScene(sourceIndex, targetIndex);
+                        _store.ReorderBuildScene(_visibleScenes, sourceIndex, targetIndex);
                     }
-                    else if (openScene && OpenScene(openScenePath, additiveOpen))
+                    else if (openScene && SceneSelectorStore.OpenScene(openScenePath, additiveOpen))
                     {
                         HostWindow?.Repaint();
                     }
@@ -491,179 +405,60 @@ namespace Gustom.Editor
 
         private void UpdateDropTarget(Vector2 mousePosition)
         {
-            dropTargetIndex = -1;
-            dropInsertionIndex = -1;
-            for (int index = 0; index < sceneRowRects.Length; index++)
+            _dropTargetIndex = -1;
+            _dropInsertionIndex = -1;
+            for (int index = 0; index < _sceneRowRects.Length; index++)
             {
-                Rect rowRect = sceneRowRects[index];
+                Rect rowRect = _sceneRowRects[index];
                 if (rowRect.Contains(mousePosition))
                 {
                     int insertionIndex = index + (mousePosition.y >= rowRect.center.y ? 1 : 0);
-                    dropInsertionIndex = insertionIndex;
-                    if (insertionIndex > pressedSceneIndex) insertionIndex--;
-                    dropTargetIndex = Mathf.Clamp(insertionIndex, 0, visibleScenes.Count - 1);
+                    _dropInsertionIndex = insertionIndex;
+                    if (insertionIndex > _pressedSceneIndex) insertionIndex--;
+                    _dropTargetIndex = Mathf.Clamp(insertionIndex, 0, _visibleScenes.Count - 1);
                     return;
                 }
             }
         }
 
-        private static Rect GetPingRect(Rect rowRect)
-        {
-            return new Rect(rowRect.xMax - 21f, rowRect.y + (rowRect.height - 16f) * 0.5f, 18f, 18f);
-        }
-
-        private void ReorderBuildScene(int oldIndex, int newIndex)
-        {
-            int visibleBuildSceneCount = visibleScenes.Count(scene => scene.InBuildSettings);
-            if (oldIndex < 0 || newIndex < 0 || oldIndex >= visibleBuildSceneCount || newIndex >= visibleBuildSceneCount || oldIndex == newIndex) return;
-
-            SceneEntry scene = visibleScenes[oldIndex];
-            visibleScenes.RemoveAt(oldIndex);
-            visibleScenes.Insert(newIndex, scene);
-            OnScenesReordered(reorderableList, oldIndex, newIndex);
-        }
+        private static Rect GetPingRect(Rect rowRect) =>
+            new(rowRect.xMax - 21f, rowRect.y + (rowRect.height - 16f) * 0.5f, 18f, 18f);
 
         private void ResetSceneRowDrag()
         {
-            pressedSceneIndex = -1;
-            dragControlId = 0;
-            dropTargetIndex = -1;
-            dropInsertionIndex = -1;
-            isDraggingScene = false;
-            pressedSceneRect = default;
-            pressedScenePath = null;
-        }
-
-        private static GUIStyle GetRightInfoStyle()
-        {
-            rightInfoStyle ??= new GUIStyle(EditorStyles.miniLabel)
-            {
-                alignment = TextAnchor.MiddleRight,
-                clipping = TextClipping.Clip
-            };
-
-            return rightInfoStyle;
-        }
-
-        private static GUIStyle GetLeftIndexStyle()
-        {
-            leftIndexStyle ??= new GUIStyle(EditorStyles.centeredGreyMiniLabel)
-            {
-                alignment = TextAnchor.MiddleLeft
-            };
-            return leftIndexStyle;
+            _pressedSceneIndex = -1;
+            _dragControlId = 0;
+            _dropTargetIndex = -1;
+            _dropInsertionIndex = -1;
+            _isDraggingScene = false;
+            _pressedCanReorder = false;
+            _pressedSceneRect = default;
+            _pressedScenePath = null;
         }
 
         private void ShowSceneContextMenu(SceneEntry scene)
         {
-            GenericMenu menu = new GenericMenu();
-            menu.AddItem(new GUIContent("Open Single (close others)"), false, () => OpenScene(scene.Path, false));
-            menu.AddItem(new GUIContent("Open Additively"), false, () => OpenScene(scene.Path, true));
+            GenericMenu menu = new();
+            SceneAsset sceneAsset = AssetDatabase.LoadAssetAtPath<SceneAsset>(scene.Path);
+            menu.AddItem(new GUIContent("Select"), false, () => Selection.activeObject = sceneAsset);
+            menu.AddItem(new GUIContent("Show in Project"), false, () => EditorGUIUtility.PingObject(sceneAsset));
+
+            if (File.Exists(scene.Path))
+                menu.AddItem(new GUIContent("Open Containing Folder"), false, () => EditorUtility.RevealInFinder(scene.Path));
+
+            menu.AddItem(new GUIContent("Open"), false, () => SceneSelectorStore.OpenScene(scene.Path, false));
+            menu.AddItem(new GUIContent("Open Additively"), false, () => SceneSelectorStore.OpenScene(scene.Path, true));
+
             menu.AddSeparator(string.Empty);
-            menu.AddItem(new GUIContent(scene.InBuildSettings ? "Remove from Build Settings" : "Add to Build Settings"), scene.InBuildSettings, () => ToggleBuildStatus(scene));
-            menu.AddItem(new GUIContent("Show in Project"), false, () => EditorGUIUtility.PingObject(AssetDatabase.LoadAssetAtPath<SceneAsset>(scene.Path)));
+
+            menu.AddItem(new GUIContent("Copy GUID"), false, () => EditorGUIUtility.systemCopyBuffer = scene.Guid);
+            menu.AddItem(new GUIContent("Copy Path"), false, () => EditorGUIUtility.systemCopyBuffer = scene.Path);
+            menu.AddSeparator(string.Empty);
+
+            menu.AddItem(new GUIContent(scene.IsPinned ? "Remove from Pinned" : "Add to Pinned"), scene.IsPinned, () => _store.TogglePinned(scene));
+            menu.AddItem(new GUIContent(scene.InBuildSettings ? "Remove from Build Settings" : "Add to Build Settings"), scene.InBuildSettings, () => _store.ToggleBuildStatus(scene));
             menu.ShowAsContext();
         }
 
-        private void ToggleBuildStatus(SceneEntry scene)
-        {
-            List<EditorBuildSettingsScene> buildScenes = EditorBuildSettings.scenes.ToList();
-            if (scene.InBuildSettings)
-            {
-                buildScenes.RemoveAll(buildScene => buildScene.path == scene.Path);
-            }
-            else
-            {
-                buildScenes.Add(new EditorBuildSettingsScene(scene.Path, true));
-            }
-
-            EditorBuildSettings.scenes = buildScenes.ToArray();
-            RefreshSceneData();
-        }
-
-        private void OnScenesReordered(ReorderableList list, int oldIndex, int newIndex)
-        {
-            int visibleBuildSceneCount = visibleScenes.Count(scene => scene.InBuildSettings);
-            if (oldIndex < 0 || newIndex < 0 || oldIndex >= visibleBuildSceneCount || newIndex >= visibleBuildSceneCount)
-            {
-                EditorApplication.delayCall += RefreshSceneData;
-                return;
-            }
-
-            List<SceneEntry> reorderedVisibleBuildScenes = visibleScenes.Where(scene => scene.InBuildSettings).ToList();
-            HashSet<SceneEntry> reorderedVisibleSet = new HashSet<SceneEntry>(reorderedVisibleBuildScenes);
-            List<int> masterBuildSlots = new List<int>();
-            for (int index = 0; index < allScenes.Count; index++)
-            {
-                if (reorderedVisibleSet.Contains(allScenes[index])) masterBuildSlots.Add(index);
-            }
-
-            for (int index = 0; index < masterBuildSlots.Count; index++)
-            {
-                allScenes[masterBuildSlots[index]] = reorderedVisibleBuildScenes[index];
-            }
-
-            ApplyBuildSceneOrder();
-            EditorApplication.delayCall += RefreshSceneData;
-        }
-
-        private void ApplyBuildSceneOrder()
-        {
-            EditorBuildSettingsScene[] currentBuildScenes = EditorBuildSettings.scenes;
-            HashSet<string> managedScenePaths = new HashSet<string>(allScenes.Select(scene => scene.Path));
-            List<SceneEntry> orderedManagedBuildScenes = allScenes.Where(scene => scene.InBuildSettings).ToList();
-            List<EditorBuildSettingsScene> updatedBuildScenes = new List<EditorBuildSettingsScene>();
-            int nextManagedScene = 0;
-
-            foreach (EditorBuildSettingsScene currentBuildScene in currentBuildScenes)
-            {
-                if (!managedScenePaths.Contains(currentBuildScene.path))
-                {
-                    updatedBuildScenes.Add(currentBuildScene);
-                    continue;
-                }
-
-                if (nextManagedScene < orderedManagedBuildScenes.Count)
-                {
-                    SceneEntry scene = orderedManagedBuildScenes[nextManagedScene++];
-                    updatedBuildScenes.Add(new EditorBuildSettingsScene(scene.Path, scene.Enabled));
-                }
-            }
-
-            while (nextManagedScene < orderedManagedBuildScenes.Count)
-            {
-                SceneEntry scene = orderedManagedBuildScenes[nextManagedScene++];
-                updatedBuildScenes.Add(new EditorBuildSettingsScene(scene.Path, scene.Enabled));
-            }
-
-            EditorBuildSettings.scenes = updatedBuildScenes.ToArray();
-        }
-
-        private static bool OpenScene(string path, bool additive)
-        {
-            if (EditorApplication.isPlaying)
-            {
-                Debug.LogWarning("Cannot open scenes from the selector while the Editor is in Play mode.");
-                return false;
-            }
-
-            try
-            {
-                if (additive)
-                {
-                    EditorSceneManager.OpenScene(path, OpenSceneMode.Additive);
-                    return true;
-                }
-
-                if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return false;
-                EditorSceneManager.OpenScene(path, OpenSceneMode.Single);
-                return true;
-            }
-            catch (ArgumentException exception)
-            {
-                Debug.LogWarning("Scene Selector: could not open '" + path + "'.\n" + exception.Message);
-                return false;
-            }
-        }
     }
 }

@@ -1,7 +1,7 @@
 {
   "name": "me.giapp.gustom",
   "displayName": "Gustom",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "unity": "2022.3",
   "description": "A collection of reusable tools and utilities for Unity.",
   "keywords": [

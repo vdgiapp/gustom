@@ -13,7 +13,7 @@ namespace Gustom.Editor
             PopupWindow.Show(activatorRect, new SceneSelectorPopup());
         }
 
-        [MenuItem("Tools/Gustom/Scene Selector Window")]
+        [MenuItem("Tools/Gustom/Scene Selector")]
         private static void OpenFromMenu()
         {
             SceneSelectorWindow.Open();
