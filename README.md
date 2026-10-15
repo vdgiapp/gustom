@@ -1,17 +1,17 @@
 
-# Gustom [![UPM branch](https://img.shields.io/badge/github-upm-blue?logo=github)](https://github.com/vdgiapp/gustom/tree/upm) [![GitHub release](https://img.shields.io/github/v/release/vdgiapp/Gustom)](https://github.com/vdgiapp/Gustom/releases)
+# Gustom [![UPM branch](https://img.shields.io/badge/github-upm-blue?logo=github)](https://github.com/vdgiapp/gustom/tree/upm) [![GitHub release](https://img.shields.io/github/v/release/vdgiapp/gustom)](https://github.com/vdgiapp/gustom/releases)
 > 🛠️ A collection of reusable tools and utilities for Unity.
 
 
 ## Current Features
 - Scene Selector
 <p align="center">
-  <img src="./Documentation/sceneselector_window.png" height=400 />
+  <img src="./Documentation/sceneselector_window.png" width=100% />
 </p>
 
 - Selection History
 <p align="center">
-  <img src="./Documentation/selectionhistory_window.png" height=400 />
+  <img src="./Documentation/selectionhistory_window.png" width=100% />
 </p>
 
 ## Unity Version Support
