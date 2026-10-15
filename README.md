@@ -3,7 +3,7 @@
 
 > 🛠️ A collection of reusable tools and utilities for Unity.
 
-[![UPM branch](https://img.shields.io/badge/github-upm-blue?logo=github)](https://github.com/vdgiapp/Gustom/tree/upm) 
+[![UPM branch](https://img.shields.io/badge/github-upm-blue?logo=github)](https://github.com/vdgiapp/gustom/tree/upm) 
 
 ## Installation
 
