@@ -3,7 +3,7 @@
 
 > 🛠️ A collection of reusable tools and utilities for Unity.
 
-[![GitHub release](https://img.shields.io/github/v/release/vdgiapp/Gustom)](https://github.com/vdgiapp/Gustom/releases)
+[![UPM branch](https://img.shields.io/badge/github-upm-blue?logo=github)](https://github.com/vdgiapp/Gustom/tree/upm) 
 
 ## Installation
 
@@ -18,7 +18,7 @@ Add the following dependency to your `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "me.giapp.gustom": "https://github.com/vdgiapp/Gustom.git#v1.0.0"
+    "me.giapp.gustom": "https://github.com/vdgiapp/Gustom.git#upm"
   }
 }
 ```
@@ -26,7 +26,7 @@ Add the following dependency to your `Packages/manifest.json`:
 Alternatively, open **Window → Package Management → Package Manager**, click **+**, select **Install package from git URL...**, and enter:
 
 ```text
-https://github.com/vdgiapp/Gustom.git#v1.0.0
+https://github.com/vdgiapp/Gustom.git#upm
 ```
 
 ## Requirements
