@@ -18,7 +18,7 @@ Add the following dependency to your `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "me.giapp.gustom": "https://github.com/vdgiapp/Gustom.git#upm"
+    "me.giapp.gustom": "https://github.com/vdgiapp/gustom.git#upm"
   }
 }
 ```
@@ -26,7 +26,7 @@ Add the following dependency to your `Packages/manifest.json`:
 Alternatively, open **Window → Package Management → Package Manager**, click **+**, select **Install package from git URL...**, and enter:
 
 ```text
-https://github.com/vdgiapp/Gustom.git#upm
+https://github.com/vdgiapp/gustom.git#upm
 ```
 
 ## Requirements
