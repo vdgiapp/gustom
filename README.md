@@ -14,11 +14,10 @@
   <img src="./Documentation/selectionhistory_window.png" width=100% />
 </p>
 
-## Unity Version Support
+## Installation
+_This package requires **Unity 2021.3 or later**._
 
-- Unity 2022.3 or later
-
-## How to Install into Your Unity Project
+### Install via UPM (with Package Manager UI)
 
 You can add the ArtificeToolkit to your Unity project as a package through Git. Follow these steps:
 - Navigate to `Window -> Package Manager` in Unity.
@@ -28,11 +27,22 @@ You can add the ArtificeToolkit to your Unity project as a package through Git. 
   <img src="./Documentation/addpackage.png" />
 </p>
 
-- In the popup that appears, paste the following URL:
-```text
-https://github.com/vdgiapp/gustom.git#upm
-```
-- *(Or use a specific version instead of `#upm` to lock the installation to a specified version).*
-```text
-https://github.com/vdgiapp/gustom.git#v1.0.0
-```
+- In the popup that appears, paste the following URL: ```https://github.com/vdgiapp/gustom.git#upm```
+- To update the package, change suffix `#{version}` to the target version.
+    - e.g. `https://github.com/vdgiapp/gustom.git#v1.0.1`
+
+
+### Install via UPM (Manually)
+
+- Open the `Packages/manifest.json` file in your project. Then add this package somewhere in the `dependencies` block:
+  ```json
+  {
+    "dependencies": {
+      "me.giapp.gustom": "https://github.com/vdgiapp/gustom.git#upm",
+      ...
+    }
+  }
+  ```
+
+- To update the package, change suffix `#{version}` to the target version.
+    - e.g. `"me.giapp.gustom": "https://github.com/vdgiapp/gustom.git#v1.0.1",`
