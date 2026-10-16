@@ -1,5 +1,10 @@
 
-# Gustom [![UPM branch](https://img.shields.io/badge/github-upm-blue?logo=github)](https://github.com/vdgiapp/gustom/tree/upm) [![GitHub release](https://img.shields.io/github/v/release/vdgiapp/gustom)](https://github.com/vdgiapp/gustom/releases)
+# Gustom
+[![UPM branch](https://img.shields.io/badge/github-upm-blue?logo=github)](https://github.com/vdgiapp/gustom/tree/upm)
+[![GitHub release](https://img.shields.io/github/v/release/vdgiapp/gustom)](https://github.com/vdgiapp/gustom/releases)
+[![](https://img.shields.io/github/release-date/vdgiapp/gustom.svg)](https://github.com/vdgiapp/gustom/releases)
+<br/>
+![](https://img.shields.io/badge/Unity-2021.2+-57b9d3.svg?style=flat&logo=unity)  
 > 🛠️ A collection of reusable tools and utilities for Unity.
 
 
