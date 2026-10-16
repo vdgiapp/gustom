@@ -8,16 +8,9 @@
 > 🛠️ A collection of reusable tools and utilities for Unity.
 
 
-## Current Features
+## Features
 - Scene Selector
-<p align="center">
-  <img src="./Documentation/sceneselector_window.png" width=100% />
-</p>
-
 - Selection History
-<p align="center">
-  <img src="./Documentation/selectionhistory_window.png" width=100% />
-</p>
 
 ## Installation
 _This package requires **Unity 2021.3 or later**._
